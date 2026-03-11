@@ -24,14 +24,7 @@
  */
 package net.runelite.client.plugins.worldhopper.ping;
 
-import com.sun.jna.Pointer;
-import com.sun.jna.platform.win32.WinNT;
-import com.sun.jna.ptr.IntByReference;
-import java.io.FileDescriptor;
-import java.lang.reflect.Field;
-import java.util.Arrays;
 import lombok.extern.slf4j.Slf4j;
-import net.runelite.client.util.OSType;
 
 @Slf4j
 public class RetransmitCalculator
@@ -39,78 +32,19 @@ public class RetransmitCalculator
 	private static final int SAMPLES = 16;
 
 	private int index;
-	private long connectionTime;
 	private final long[] bytesOut = new long[SAMPLES];
 	private final long[] bytesRetrans = new long[SAMPLES];
 	private int loss;
 
-	public void record(FileDescriptor fd)
+	public void record(TCPInfo info)
 	{
-		if (OSType.getOSType() != OSType.Windows)
-		{
-			return;
-		}
-
-		int handle;
-		try
-		{
-			Field f = FileDescriptor.class.getDeclaredField("fd");
-			f.setAccessible(true);
-			handle = f.getInt(fd);
-		}
-		catch (NoSuchFieldException | IllegalAccessException ex)
-		{
-			log.debug(null, ex);
-			return;
-		}
-
-		IntByReference tcpInfoVersion = new IntByReference(0); // Version 0 of TCP_INFO
-		TCP_INFO_v0 info = new TCP_INFO_v0();
-		IntByReference bytesReturned = new IntByReference();
-
-		Ws2_32 winsock = Ws2_32.INSTANCE;
-		int rc;
-		try
-		{
-			rc = winsock.WSAIoctl(
-				new WinNT.HANDLE(Pointer.createConstant(handle)),
-				Ws2_32.SIO_TCP_INFO,
-				tcpInfoVersion.getPointer(), Integer.BYTES,
-				info.getPointer(), info.size(),
-				bytesReturned,
-				Pointer.NULL,
-				Pointer.NULL
-			);
-		}
-		catch (UnsatisfiedLinkError ex)
-		{
-			// probably Windows 7
-			log.debug("WSAIoctl()", ex);
-			return;
-		}
-		if (rc != 0)
-		{
-			log.debug("WSAIoctl(SIO_TCP_INFO) error"); // WSAGetLastError() seems to always be 0?
-			return;
-		}
-
-		info.read();
-
 		int nextIndex = index++ & (SAMPLES - 1);
 
-		long connectionTime = info.ConnectionTimeMs.longValue();
-		long out = info.BytesOut.longValue();
-		long rt = info.BytesRetrans.longValue();
+		long out = info.getTransmitted();
+		long rt = info.getRetransmitted();
 
-		log.trace("rtt: {}us bytes out: {} retrans: {}", info.RttUs.longValue(), out, rt);
+		log.trace("rtt: {}us out: {} retrans: {}", info.getRTT(), out, rt);
 
-		if (connectionTime < this.connectionTime)
-		{
-			Arrays.fill(bytesOut, 0L);
-			Arrays.fill(bytesRetrans, 0L);
-		}
-
-		this.connectionTime = connectionTime;
 		bytesOut[nextIndex] = out;
 		bytesRetrans[nextIndex] = rt;
 

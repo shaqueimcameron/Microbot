@@ -392,9 +392,19 @@ public class ActorModel implements Actor
 	}
 
 	@Override
+	public int getFootprintSize() {
+		return actor.getFootprintSize();
+	}
+
+	@Override
 	public int getAnimationHeightOffset()
 	{
 		return actor.getAnimationHeightOffset();
+	}
+
+	@Override
+	public int getRenderMode() {
+		return actor.getRenderMode();
 	}
 
 	@Override

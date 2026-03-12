@@ -3309,8 +3309,10 @@ public class Rs2Walker {
         }
         if (Rs2Tile.getReachableTilesFromTile(Rs2Player.getWorldLocation(), distance).containsKey(target)
                 || !Rs2Tile.isWalkable(LocalPoint.fromWorld(Microbot.getClient().getTopLevelWorldView(), target)) && Rs2Player.getWorldLocation().distanceTo(target) <= distance) {
+            log.info(Rs2Tile.getReachableTilesFromTile(Rs2Player.getWorldLocation(), distance).toString());
             return WalkerState.ARRIVED;
         }
+
         final Pathfinder pathfinder = ShortestPathPlugin.getPathfinder();
         if (pathfinder != null && !pathfinder.isDone())
             return WalkerState.MOVING;

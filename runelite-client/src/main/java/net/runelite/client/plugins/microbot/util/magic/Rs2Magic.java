@@ -282,7 +282,7 @@ public class Rs2Magic {
         if (!setup()) return;
 
         final Widget highAlch = Rs2Widget.findWidget(MagicAction.HIGH_LEVEL_ALCHEMY.getName());
-        if (highAlch.getSpriteId() != 41) return;
+//        if (highAlch.getSpriteId() != 41) return;
         alch(highAlch, item, sleepMin, sleepMax);
     }
 

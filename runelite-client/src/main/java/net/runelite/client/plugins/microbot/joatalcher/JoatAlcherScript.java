@@ -219,6 +219,7 @@ public class JoatAlcherScript extends Script {
         items.add("Rune platebody");
         items.add("Rune platelegs");
         items.add("Rune kiteshield");
+        items.add("Adamant platebody");
         items.add("Rune pickaxe");
         items.add("Rune plateskirt");
         items.add("Rune full helm");
@@ -247,6 +248,7 @@ public class JoatAlcherScript extends Script {
                         if (Rs2Inventory.contains(itemName)) {
                             currentAlch = itemName;
                             log.info("Now alching: " + currentAlch);
+
                             break;
                         }
                     }
@@ -320,21 +322,21 @@ public class JoatAlcherScript extends Script {
             return;
         }
 
-        if(Rs2Random.nextInt(0,200,0.5,false)<3) {
+        if(Rs2Random.nextInt(0,1500,0.5,false)<3) {
             log.info("Taking a break...");
             //int delay = random.nextInt(5000, 10000);
             sleep(Rs2Random.nextInt(5000, 120000, 0.5, false));
         }
 
-        if(Rs2Tab.isCurrentTab(InterfaceTab.MAGIC)) {
-            Widget highAlch = Rs2Widget.findWidget(MagicAction.HIGH_LEVEL_ALCHEMY.getName());
-            if (highAlch == null || highAlch.getSpriteId() != 41) {
-                log.info("Stupid glitch.. need to relog!");
-                Microbot.stopPlugin(JoatAlcherPlugin.class);
-                Rs2Player.logout();
-                return;
-            }
-        }
+//        if(Rs2Tab.isCurrentTab(InterfaceTab.MAGIC)) {
+//            Widget highAlch = Rs2Widget.findWidget(MagicAction.HIGH_LEVEL_ALCHEMY.getName());
+//            if (highAlch == null || highAlch.getSpriteId() != 41) {
+//                log.info("Stupid glitch.. need to relog!");
+//                Microbot.stopPlugin(JoatAlcherPlugin.class);
+//                Rs2Player.logout();
+//                return;
+//            }
+//        }
         Rs2Magic.alch(pi.getName(),0,100);
         while(!Rs2Player.waitForXpDrop(Skill.MAGIC)) {
             sleep(Rs2Random.nextInt(200, 2000, 2, false));

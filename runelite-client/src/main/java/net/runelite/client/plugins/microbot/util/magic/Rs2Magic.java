@@ -280,7 +280,10 @@ public class Rs2Magic {
 
     private static void highAlch(Rs2ItemModel item, int sleepMin, int sleepMax) {
         if (!setup()) return;
-        alch(MagicAction.HIGH_LEVEL_ALCHEMY, item, sleepMin, sleepMax);
+
+        final Widget highAlch = Rs2Widget.findWidget(MagicAction.HIGH_LEVEL_ALCHEMY.getName());
+//        if (highAlch.getSpriteId() != 41) return;
+        alch(highAlch, item, sleepMin, sleepMax);
     }
 
     private static void lowAlch(Rs2ItemModel item, int sleepMin, int sleepMax) {

@@ -1858,6 +1858,8 @@ public class Rs2Bank {
      * @return bankItem
      */
     private static Rs2ItemModel findBankItem(int id) {
+
+
         return get(x -> x.getId() == id);
     }
 

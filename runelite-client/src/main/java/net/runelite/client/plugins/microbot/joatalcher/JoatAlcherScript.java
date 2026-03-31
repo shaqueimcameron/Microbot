@@ -248,14 +248,14 @@ public class JoatAlcherScript extends Script {
                         if (Rs2Inventory.contains(itemName)) {
                             currentAlch = itemName;
                             log.info("Now alching: " + currentAlch);
-
+                            moveAlchableToFirstSlot();
                             break;
                         }
                     }
                     pi = new PurchasableItem(currentAlch, 0, 0, 0);
                 }
                 if(currentAlch==null || pi == null || pi.getName()==null) {
-                    log.info("No more " + pi.getName() + " left, going back to banking state");
+                    log.info("No more " + pi.getName() + " alchables! Killing the script!");
                     Microbot.stopPlugin(JoatAlcherPlugin.class);
                     return;
                 }
@@ -267,10 +267,9 @@ public class JoatAlcherScript extends Script {
                     return;
                 }
                 if(!Rs2Inventory.contains(pi.getName())) {
-                    log.info("No more " + pi.getName() + " left, going back to banking state");
+                    log.info("No more " + pi.getName() + " getting another item...");
                     currentAlch = null;
                     pi = null;
-                    Microbot.stopPlugin(JoatAlcherPlugin.class);
                 }
 
 
@@ -317,7 +316,7 @@ public class JoatAlcherScript extends Script {
         }
 
         if(Rs2Inventory.count(pi.getName())==0) {
-            log.info("No more " + pi.getName() + " left, going back to banking state");
+            log.info("No items in the inventory this is weird... Exiting...");
             Microbot.stopPlugin(JoatAlcherPlugin.class);
             return;
         }
@@ -327,6 +326,8 @@ public class JoatAlcherScript extends Script {
             //int delay = random.nextInt(5000, 10000);
             sleep(Rs2Random.nextInt(5000, 120000, 0.5, false));
         }
+
+        moveAlchableToFirstSlot();
 
 //        if(Rs2Tab.isCurrentTab(InterfaceTab.MAGIC)) {
 //            Widget highAlch = Rs2Widget.findWidget(MagicAction.HIGH_LEVEL_ALCHEMY.getName());
@@ -343,6 +344,15 @@ public class JoatAlcherScript extends Script {
         }
         sleep(Rs2Random.nextInt(0, 700, 2, false));
 
+    }
+
+    private void moveAlchableToFirstSlot() {
+        Rs2ItemModel item = Rs2Inventory.get(currentAlch);
+        if(item != null && item.getSlot() != 0) {
+            log.info("Moving to first slot....");
+            Rs2Inventory.moveItemToSlot(Rs2Inventory.get(currentAlch), 0);
+            sleep(Rs2Random.nextInt(1000,2500,0.5,false));
+        }
     }
 
     private void buyingState() {

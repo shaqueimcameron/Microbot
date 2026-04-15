@@ -24,6 +24,7 @@ import com.google.inject.Inject;
 import com.google.inject.Provides;
 import lombok.AccessLevel;
 import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
 import lombok.Setter;
 import net.runelite.api.Point;
 import net.runelite.api.*;
@@ -34,6 +35,7 @@ import net.runelite.api.events.MenuOpened;
 import net.runelite.api.widgets.ComponentID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.api.worldmap.WorldMap;
+import net.runelite.api.worldmap.WorldMapData;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -74,6 +76,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 import java.util.regex.Pattern;
 
+@Slf4j
 @PluginDescriptor(
         name = PluginDescriptor.Mocrosoft + "Web Walker",
         description = "Draws the shortest path to a chosen destination on the map (right click a spot on the world map to use)",
@@ -292,8 +295,12 @@ public class ShortestPathPlugin extends Plugin implements KeyListener {
         }
 
         final ExecutorService finalExecutor = executor;
+        final long scheduleTime = System.currentTimeMillis();
         getClientThread().invokeLater(() -> {
+            long invokeLaterDelay = System.currentTimeMillis() - scheduleTime;
+            long refreshStart = System.currentTimeMillis();
             pathfinderConfig.refresh();
+            long refreshTime = System.currentTimeMillis() - refreshStart;
             pathfinderConfig.filterLocations(ends, canReviveFiltered);
             synchronized (pathfinderMutex) {
                 if (ends.isEmpty()) {
@@ -303,6 +310,8 @@ public class ShortestPathPlugin extends Plugin implements KeyListener {
                     pathfinderFuture = finalExecutor.submit(pathfinder);
                 }
             }
+            log.info("[ShortestPath] restartPathfinding: invokeLater delay={}ms, config.refresh={}ms",
+                    invokeLaterDelay, refreshTime);
         });
     }
 
@@ -664,7 +673,18 @@ public class ShortestPathPlugin extends Plugin implements KeyListener {
                         : client.getSelectedSceneTile().getWorldLocation();
             }
         } else {
-            return calculateMapPoint(client.isMenuOpen() ? lastMenuOpenedPoint : client.getMouseCanvasPosition());
+            WorldPoint mapPoint = calculateMapPoint(client.isMenuOpen() ? lastMenuOpenedPoint : client.getMouseCanvasPosition());
+            if (mapPoint != null) {
+                WorldMapData worldMapData = client.getWorldMap().getWorldMapData();
+                if (worldMapData != null && !worldMapData.surfaceContainsPosition(mapPoint.getX(), mapPoint.getY())) {
+                    log.warn("[ShortestPath] World map target {} is a dungeon display coordinate (not on surface map). " +
+                            "The actual game tiles may be at different coordinates. " +
+                            "For accurate dungeon navigation, close the world map and right-click a tile in the game view instead.",
+                            mapPoint);
+                    return null;
+                }
+            }
+            return mapPoint;
         }
         return null;
     }
@@ -713,7 +733,26 @@ public class ShortestPathPlugin extends Plugin implements KeyListener {
                 start = pathfinder.getStart();
                 lastLocation = WorldPoint.fromLocalInstance(client, localPlayer.getLocalLocation());
             } else {
-                start = WorldPoint.fromLocalInstance(client, localPlayer.getLocalLocation());
+                WorldPoint rawStart = WorldPoint.fromLocalInstance(client, localPlayer.getLocalLocation());
+                // When the player is inside a POH instance, the raw instance-template tile
+                // (e.g. (1941,7052,3)) doesn't match any registered POH transport origin — the
+                // POH transports are keyed to PohPanel.instance.tilePanel.getTile() (the exit
+                // portal). Without this remap the pathfinder never considers any POH teleport
+                // and the walker tight-loops on null LocalPoint canvas-walks.
+                //
+                // We gate on "in an instance AND the POH panel has an exit-portal tile
+                // configured". PohTeleports.isInHouse() is too strict — it additionally
+                // requires POH_EXIT_PORTAL to be currently loaded in the scene, which fails
+                // on larger houses where the portal is out of render range.
+                WorldPoint exitPortal = PohPanel.getExitPortalTile();
+                boolean inInstance = client.getTopLevelWorldView().getScene().isInstance();
+                if (exitPortal != null && inInstance) {
+                    Microbot.log("[ShortestPath] In POH instance — remapping pathfinder start "
+                            + rawStart + " -> exit portal " + exitPortal);
+                    start = exitPortal;
+                } else {
+                    start = rawStart;
+                }
                 lastLocation = start;
             }
             final Set<WorldPoint> destinations = new HashSet<>(targets);

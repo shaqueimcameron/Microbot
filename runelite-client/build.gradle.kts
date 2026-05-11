@@ -52,6 +52,36 @@ plugins {
 
 }
 
+tasks.register<JavaExec>("run") {
+    group = "application"
+    description = "Run RuneLite client"
+
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("net.runelite.client.RuneLite")
+
+    jvmArgs(
+        "-Dfile.encoding=UTF-8",
+        "-ea"
+    )
+}
+
+tasks.register<JavaExec>("seedMenuActionInfo") {
+    group = "verification"
+    description = "Generate src/main/resources/.../menu-action-info.properties from the injected-client jar. Re-run when the injected-client dependency bumps."
+
+    dependsOn(":client:compileJava")
+
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("net.runelite.client.plugins.microbot.util.reflection.MenuActionResourceSeeder")
+
+    val outputFile = file("src/main/resources/net/runelite/client/plugins/microbot/util/reflection/menu-action-info.properties")
+    args(outputFile.absolutePath)
+
+    doFirst {
+        outputFile.parentFile.mkdirs()
+    }
+}
+
 tasks.register<JavaExec>("runDebug") {
     group = "application"
     description = "Run RuneLite client with JDWP debug"
@@ -62,6 +92,7 @@ tasks.register<JavaExec>("runDebug") {
     // same JVM args you need normally
     jvmArgs(
         "-Dfile.encoding=UTF-8",
+        "-ea",
         // JDWP agent for debugger
         "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=5005"
     )
@@ -74,7 +105,10 @@ tasks.register<JavaExec>("runTest") {
     classpath = sourceSets.main.get().runtimeClasspath
     mainClass.set("net.runelite.client.RuneLite")
 
-    jvmArgs("-Dfile.encoding=UTF-8")
+    jvmArgs(
+        "-Dfile.encoding=UTF-8",
+        "-ea"
+    )
 
     System.getProperties()
         .filter { it.key.toString().startsWith("microbot.test.") }

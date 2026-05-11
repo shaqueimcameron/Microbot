@@ -89,6 +89,15 @@ public class QuestScript extends Script {
 
     QuestStep dialogueStartedStep = null;
 
+    /**
+     * Epoch millis at which the post-dialogue cooldown expires. While
+     * {@code System.currentTimeMillis() < dialogueCooldownEndsAt}, the main tick
+     * returns early to avoid re-clicking the quest NPC and interrupting scripted
+     * animations or cutscenes that play between dialogue exchanges. Set on the
+     * transition from in-dialogue to not-in-dialogue; zero means no cooldown.
+     */
+    private long dialogueCooldownEndsAt = 0;
+
 
 
     public boolean run(QuestHelperConfig config, QuestHelperPlugin mQuestPlugin) {
@@ -182,6 +191,9 @@ public class QuestScript extends Script {
                         //if there is no quest option in the dialogue, just click player location to remove
                         // the dialogue to avoid getting stuck in an infinite loop of dialogues
                         if (!hasOption) {
+                            if (Rs2Dialogue.acceptQuestStartDialogue()) {
+                                return;
+                            }
                             if (getQuestHelperPlugin().getSelectedQuest() != null &&
                                     getQuestHelperPlugin().getSelectedQuest().getQuest().getId() == Quest.IMP_CATCHER.getId()
                                     && Microbot.getClient().getTopLevelWorldView().getPlane() == 1) {
@@ -210,7 +222,14 @@ public class QuestScript extends Script {
                         Rs2Keyboard.keyPress(KeyEvent.VK_SPACE);
                         return;
                     } else {
+                        if (dialogueStartedStep != null) {
+                            dialogueCooldownEndsAt = System.currentTimeMillis() + Rs2Random.between(4000, 7000);
+                        }
                         dialogueStartedStep = null;
+                    }
+
+                    if (System.currentTimeMillis() < dialogueCooldownEndsAt) {
+                        return;
                     }
 
                     boolean isInCutscene = Microbot.getVarbitValue(4606) > 0;
@@ -749,18 +768,35 @@ public class QuestScript extends Script {
 	}
 
 	private int tradablePrimaryId(ItemRequirement itemRequirement) {
-		return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+		List<Integer> tradableIds = Microbot.getClientThread().runOnClientThreadOptional(() -> {
+			List<Integer> ids = new ArrayList<>();
 			for (Integer id : itemRequirement.getAllIds()) {
 				if (id == null || id <= 0) {
 					continue;
 				}
 				ItemComposition def = Microbot.getClient().getItemDefinition(id);
 				if (def != null && def.isTradeable()) {
-					return id;
+					ids.add(id);
 				}
 			}
+			return ids;
+		}).orElse(new ArrayList<>());
+
+		if (tradableIds.isEmpty()) {
 			return -1;
-		}).orElse(-1);
+		}
+
+		// Pick the cheapest tradable variant to avoid league/cosmetic items priced at MAX_VALUE
+		int bestId = tradableIds.get(0);
+		int bestPrice = Integer.MAX_VALUE;
+		for (int id : tradableIds) {
+			int price = fetchInstabuyReferencePrice(id);
+			if (price > 0 && price < bestPrice) {
+				bestPrice = price;
+				bestId = id;
+			}
+		}
+		return bestId;
 	}
 
 	private int remainingQuantityNeeded(ItemRequirement itemRequirement) {
@@ -999,10 +1035,11 @@ public class QuestScript extends Script {
 
 	private int fetchInstabuyReferencePrice(int itemId) {
 		WikiPrice priceData = Rs2GrandExchange.getRealTimePrices(itemId);
-		if (priceData != null && priceData.buyPrice > 0) {
+		if (priceData != null && priceData.buyPrice > 0 && priceData.buyPrice < Integer.MAX_VALUE) {
 			return priceData.buyPrice;
 		}
-		return Rs2GrandExchange.getPrice(itemId);
+		int price = Rs2GrandExchange.getPrice(itemId);
+		return (price > 0 && price < Integer.MAX_VALUE) ? price : -1;
 	}
 
 	private int notedVariantId(int unnotedId) {

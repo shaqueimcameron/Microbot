@@ -22,6 +22,8 @@ import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.poh.PohTeleports;
 import net.runelite.client.plugins.microbot.util.tabs.Rs2Tab;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -38,8 +40,8 @@ public class PathfinderConfig {
     private static final WorldArea WILDERNESS_ABOVE_GROUND_LEVEL_20 = new WorldArea(2944, 3680, 448, 448, 0);
     private static final WorldArea WILDERNESS_ABOVE_GROUND_LEVEL_30 = new WorldArea(2944, 3760, 448, 448, 0);
     private static final WorldArea WILDERNESS_UNDERGROUND = new WorldArea(2944, 9918, 518, 458, 0);
-    private static final WorldArea WILDERNESS_UNDERGROUND_LEVEL_20 = new WorldArea(2944, 10075, 320, 442, 0);
-    private static final WorldArea WILDERNESS_UNDERGROUND_LEVEL_30 = new WorldArea(2944, 10155, 320, 442, 0);
+    private static final WorldArea WILDERNESS_UNDERGROUND_LEVEL_20 = new WorldArea(2944, 10075, 518, 301, 0);
+    private static final WorldArea WILDERNESS_UNDERGROUND_LEVEL_30 = new WorldArea(2944, 10155, 518, 221, 0);
     private static final WorldArea FEROX_ENCLAVE_1 = new WorldArea(3123, 3622, 2, 10, 0);
     private static final WorldArea FEROX_ENCLAVE_2 = new WorldArea(3125, 3617, 16, 23, 0);
     private static final WorldArea FEROX_ENCLAVE_3 = new WorldArea(3138, 3636, 18, 10, 0);
@@ -54,6 +56,7 @@ public class PathfinderConfig {
 	private static final WorldPoint SPIRIT_TREE_PORT_SARIM = new WorldPoint(3058, 3257, 0);
 	private static final WorldPoint SPIRIT_TREE_HOSIDIUS = new WorldPoint(1693, 3540, 0);
 	private static final WorldPoint SPIRIT_TREE_FARMING_GUILD = new WorldPoint(1251, 3750, 0);
+	private static final Set<Long> STATIC_BLOCKED_EDGES_PACKED = loadStaticBlockedEdgesFromResources();
 
     private final SplitFlagMap mapData;
     private final ThreadLocal<CollisionMap> map;
@@ -71,6 +74,8 @@ public class PathfinderConfig {
     // Copy of transports with packed positions for the hotpath; lists are not copied and are the same reference in both maps
     @Getter
     private final PrimitiveIntHashMap<Set<Transport>> transportsPacked;
+    @Getter
+    private final Set<Long> blockedTransportEdgesPacked;
 
     private final Client client;
     private final ShortestPathConfig config;
@@ -149,6 +154,8 @@ public class PathfinderConfig {
         this.usableTeleports = ConcurrentHashMap.newKeySet(allTransports.size() / 20);
         this.transports = new ConcurrentHashMap<>(allTransports.size() / 2);
         this.transportsPacked = new PrimitiveIntHashMap<>(allTransports.size() / 2);
+        this.blockedTransportEdgesPacked = ConcurrentHashMap.newKeySet();
+        addStaticBlockedEdges();
         this.client = client;
         this.config = config;
         //START microbot variables
@@ -287,6 +294,8 @@ public class PathfinderConfig {
 
         transports.clear();
         transportsPacked.clear();
+        blockedTransportEdgesPacked.clear();
+        addStaticBlockedEdges();
         usableTeleports.clear();
 
         long mergeStart = System.currentTimeMillis();
@@ -332,12 +341,20 @@ public class PathfinderConfig {
         long useTransportTimeNanos = 0;
         Map<TransportType, int[]> typeStats = new java.util.EnumMap<>(TransportType.class);
 
+        int moaSeen = 0;
+        int moaKept = 0;
+
         for (Map.Entry<WorldPoint, Set<Transport>> entry : mergedList.entrySet()) {
             WorldPoint point = entry.getKey();
             Set<Transport> usableTransports = new HashSet<>(entry.getValue().size());
             for (Transport transport : entry.getValue()) {
                 totalTransports++;
                 updateActionBasedOnQuestState(transport);
+
+                boolean isMoa = transport.getType() == TransportType.SEASONAL_TRANSPORT
+                        && transport.getDisplayInfo() != null
+                        && transport.getDisplayInfo().toLowerCase().contains("map of alacrity");
+                if (isMoa) moaSeen++;
 
                 long t0 = System.nanoTime();
                 boolean usable = useTransport(transport);
@@ -350,13 +367,17 @@ public class PathfinderConfig {
                 stats[2] += (int)(elapsed / 1_000);
                 if (usable) stats[1]++;
 
-                if (!usable) continue;
+                if (!usable) {
+                    addBlockedTransportEdgeIfNeeded(transport);
+                    continue;
+                }
                 checkedTransports++;
                 if (point == null) {
                     usableTeleports.add(transport);
                 } else {
                     usableTransports.add(transport);
                 }
+                if (isMoa) moaKept++;
             }
 
             if (point != null && !usableTransports.isEmpty()) {
@@ -385,6 +406,141 @@ public class PathfinderConfig {
                 .limit(5)
                 .forEach(e -> log.info("[refreshTransports]   {} : count={}, usable={}, time={}ms",
                         e.getKey(), e.getValue()[0], e.getValue()[1], e.getValue()[2] / 1000));
+
+        log.debug("[MoA] refreshTransports: seen={} kept={} (useSeasonalTransports={}, VarbitID.LEAGUE_TYPE={})",
+                moaSeen, moaKept, useSeasonalTransports,
+                Microbot.getVarbitValue(10032));
+    }
+
+    public boolean isBlockedTransportEdge(int originPacked, int destinationPacked) {
+        return blockedTransportEdgesPacked.contains(transportEdgeKey(originPacked, destinationPacked));
+    }
+
+    public boolean isBlockedTransportStep(int originPacked, int destinationPacked) {
+        return isBlockedTransportStep(originPacked, destinationPacked, blockedTransportEdgesPacked);
+    }
+
+    static boolean isBlockedTransportStep(int originPacked, int destinationPacked, Set<Long> blockedEdges) {
+        if (blockedEdges == null || blockedEdges.isEmpty()) {
+            return false;
+        }
+        if (blockedEdges.contains(transportEdgeKey(originPacked, destinationPacked))) {
+            return true;
+        }
+
+        int ox = WorldPointUtil.unpackWorldX(originPacked);
+        int oy = WorldPointUtil.unpackWorldY(originPacked);
+        int oz = WorldPointUtil.unpackWorldPlane(originPacked);
+        int dx = Integer.signum(WorldPointUtil.unpackWorldX(destinationPacked) - ox);
+        int dy = Integer.signum(WorldPointUtil.unpackWorldY(destinationPacked) - oy);
+        int dz = WorldPointUtil.unpackWorldPlane(destinationPacked) - oz;
+        if (dz != 0 || dx == 0 || dy == 0) {
+            return false;
+        }
+
+        int xThenY = WorldPointUtil.packWorldPoint(ox + dx, oy, oz);
+        int yThenX = WorldPointUtil.packWorldPoint(ox, oy + dy, oz);
+        return blockedEdges.contains(transportEdgeKey(originPacked, xThenY))
+                || blockedEdges.contains(transportEdgeKey(xThenY, destinationPacked))
+                || blockedEdges.contains(transportEdgeKey(originPacked, yThenX))
+                || blockedEdges.contains(transportEdgeKey(yThenX, destinationPacked));
+    }
+
+    public void addBlockedTransportEdgeIfNeeded(Transport transport) {
+        if (!blocksWalkingEdgeWhenUnavailable(transport)) {
+            return;
+        }
+        addBlockedEdge(transport.getOrigin(), transport.getDestination());
+    }
+
+    static long transportEdgeKey(int originPacked, int destinationPacked) {
+        return ((long) originPacked << 32) ^ (destinationPacked & 0xffffffffL);
+    }
+
+    private void addStaticBlockedEdges() {
+        blockedTransportEdgesPacked.addAll(STATIC_BLOCKED_EDGES_PACKED);
+    }
+
+    private void addBlockedEdge(WorldPoint origin, WorldPoint destination) {
+        blockedTransportEdgesPacked.add(transportEdgeKey(
+                WorldPointUtil.packWorldPoint(origin),
+                WorldPointUtil.packWorldPoint(destination)));
+    }
+
+    private static Set<Long> loadStaticBlockedEdgesFromResources() {
+        Set<Long> edges = new HashSet<>();
+        final String delimColumn = "\t";
+        final String prefixComment = "#";
+
+        try {
+            String s = new String(Util.readAllBytes(
+                    ShortestPathPlugin.class.getResourceAsStream("blocked_edges.tsv")), StandardCharsets.UTF_8);
+            Scanner scanner = new Scanner(s);
+            String headerLine = scanner.nextLine();
+            headerLine = headerLine.startsWith(prefixComment + " ")
+                    ? headerLine.replace(prefixComment + " ", prefixComment)
+                    : headerLine;
+            headerLine = headerLine.startsWith(prefixComment)
+                    ? headerLine.replace(prefixComment, "")
+                    : headerLine;
+            String[] headers = headerLine.split(delimColumn);
+
+            while (scanner.hasNextLine()) {
+                String line = scanner.nextLine();
+                if (line.startsWith(prefixComment) || line.isBlank()) {
+                    continue;
+                }
+
+                String[] fields = line.split(delimColumn);
+                Map<String, String> fieldMap = new HashMap<>();
+                for (int i = 0; i < headers.length; i++) {
+                    if (i < fields.length) {
+                        fieldMap.put(headers[i], fields[i]);
+                    }
+                }
+
+                WorldPoint origin = parseBlockedEdgePoint(fieldMap.get("Origin"));
+                WorldPoint destination = parseBlockedEdgePoint(fieldMap.get("Destination"));
+                boolean bidirectional = Boolean.parseBoolean(fieldMap.getOrDefault("Bidirectional", "false"));
+                addStaticEdge(edges, origin, destination);
+                if (bidirectional) {
+                    addStaticEdge(edges, destination, origin);
+                }
+            }
+            scanner.close();
+        } catch (IOException e) {
+            throw new RuntimeException("Unable to load shortest-path blocked edges", e);
+        }
+
+        return Collections.unmodifiableSet(edges);
+    }
+
+    private static WorldPoint parseBlockedEdgePoint(String point) {
+        if (point == null || point.isBlank()) {
+            throw new IllegalArgumentException("Blocked edge point is blank");
+        }
+        String[] parts = point.trim().split(" ");
+        if (parts.length != 3) {
+            throw new IllegalArgumentException("Blocked edge point must be 'x y plane': " + point);
+        }
+        return new WorldPoint(
+                Integer.parseInt(parts[0]),
+                Integer.parseInt(parts[1]),
+                Integer.parseInt(parts[2]));
+    }
+
+    private static void addStaticEdge(Set<Long> edges, WorldPoint origin, WorldPoint destination) {
+        edges.add(transportEdgeKey(
+                WorldPointUtil.packWorldPoint(origin),
+                WorldPointUtil.packWorldPoint(destination)));
+    }
+
+    private static boolean blocksWalkingEdgeWhenUnavailable(Transport transport) {
+        if (transport == null || transport.getOrigin() == null || transport.getDestination() == null) {
+            return false;
+        }
+        return transport.getType() == TransportType.AGILITY_SHORTCUT
+                || transport.getType() == TransportType.GRAPPLE_SHORTCUT;
     }
 
 
@@ -452,7 +608,7 @@ public class PathfinderConfig {
                         return true;
                     }
                     // Varplayer check
-                    if (entry.getVarplayers().stream().anyMatch(varplayerCheck -> !varplayerCheck.matches(Microbot.getVarbitPlayerValue(varplayerCheck.getVarplayerId())))) {
+                    if (entry.getVarplayers().stream().anyMatch(varplayerCheck -> !varplayerCheck.matches(getLiveVarplayerValue(varplayerCheck.getVarplayerId())))) {
                         return true;
                     }
                     // Skill level check
@@ -549,13 +705,49 @@ public class PathfinderConfig {
     private boolean varplayerChecks(Transport transport) {
         return transport.getVarplayers().isEmpty() ||
                 transport.getVarplayers().stream()
-                        .allMatch(varplayerCheck -> varplayerCheck.matches(Microbot.getVarbitPlayerValue(varplayerCheck.getVarplayerId())));
+                        .allMatch(varplayerCheck -> varplayerCheck.matches(getLiveVarplayerValue(varplayerCheck.getVarplayerId())));
+    }
+
+    private int getLiveVarplayerValue(int varplayerId) {
+        return Microbot.getClientThread()
+                .runOnClientThreadOptional(() -> client.getVarpValue(varplayerId))
+                .orElse(0);
     }
 
     private boolean useTransport(Transport transport) {
+        boolean traceMoa = transport.getType() == TransportType.SEASONAL_TRANSPORT
+                && transport.getDisplayInfo() != null
+                && transport.getDisplayInfo().toLowerCase().contains("map of alacrity");
+
+        // Session blacklist: once an MoA destination fails at runtime (locked region or
+        // unrecognised name), don't let the pathfinder keep routing through it.
+        if (traceMoa && Rs2Walker.blacklistedMoaDestinations.contains(
+                WorldPointUtil.packWorldPoint(transport.getDestination()))) {
+            return false;
+        }
+
+        // Region-level lock: once handleSeasonalTransport sees a region render with
+        // <str>…</str> (locked), reject every destination in that region. Without this,
+        // the pathfinder keeps picking a different Asgarnia/Desert/etc. destination on
+        // each re-path — walker fails, blacklists one, re-path picks the next, infinite
+        // "running around" loop. Display info format: "Map of Alacrity: <Region> - <Name>".
+        if (traceMoa && !Rs2Walker.lockedMoaRegions.isEmpty()) {
+            String disp = transport.getDisplayInfo();
+            int colon = disp.indexOf(':');
+            int dash = colon >= 0 ? disp.indexOf(" - ", colon) : -1;
+            if (colon >= 0 && dash > colon) {
+                String region = disp.substring(colon + 1, dash).trim().toLowerCase();
+                if (Rs2Walker.lockedMoaRegions.contains(region)) {
+                    return false;
+                }
+            }
+        }
+
         // Check if the feature flag is disabled
         if (!isFeatureEnabled(transport)) {
             log.debug("Transport Type {} is disabled by feature flag", transport.getType());
+            if (traceMoa) log.debug("[MoA] rejected '{}' — feature flag disabled (useSeasonalTransports={})",
+                    transport.getDisplayInfo(), useSeasonalTransports);
             return false;
         }
         // If the transport requires you to be in a members world (used for more granular member requirements)
@@ -581,6 +773,8 @@ public class PathfinderConfig {
         // If the transport has varbit requirements & the varbits do not match
         if (!varbitChecks(transport)) {
             log.debug("Transport ( O: {} D: {} ) requires varbits {}", transport.getOrigin(), transport.getDestination(), transport.getVarbits());
+            if (traceMoa) log.debug("[MoA] rejected '{}' — varbit check failed (varbits={}, LEAGUE_TYPE={})",
+                    transport.getDisplayInfo(), transport.getVarbits(), Microbot.getVarbitValue(10032));
             return false;
         }
 
@@ -637,6 +831,8 @@ public class PathfinderConfig {
             boolean hasRequiredItems = hasRequiredItems(transport);
             if (!hasRequiredItems) {
                 log.debug("Transport ( O: {} D: {} ) requires items {}", transport.getOrigin(), transport.getDestination(), transport.getItemIdRequirements().stream().flatMap(Set::stream).collect(Collectors.toSet()));
+                if (traceMoa) log.debug("[MoA] rejected '{}' — missing required items {}",
+                        transport.getDisplayInfo(), transport.getItemIdRequirements());
             }
             return hasRequiredItems;
         }
